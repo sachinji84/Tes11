@@ -1,0 +1,10 @@
+openai
+langchain
+langchain-community
+langchain-openai
+pypdf
+flask
+python-dotenv
+requests
+PyPDF2
+ipykernel

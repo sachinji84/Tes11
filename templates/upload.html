@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Interaction</title>
+</head>
+<body>
+    <h1>Upload Document</h1>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" id="document" name="document" required>
+        <button type="submit">Upload</button>
+    </form>
+    <p id="uploadResult"></p>
+
+    <h2>Interact with Document</h2>
+    <form id="interactionForm">
+        <input type="text" id="query" placeholder="Ask something..." required>
+        <button type="submit">Submit</button>
+    </form>
+    <p id="response"></p>
+
+    <script>
+        document.getElementById('uploadForm').onsubmit = async function(event) {
+            event.preventDefault();
+            const formData = new FormData();
+            formData.append('document', document.getElementById('document').files[0]);
+
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+            document.getElementById('uploadResult').textContent = result.message;
+            localStorage.setItem('doc_id', result.doc_id);
+        };
+
+        document.getElementById('interactionForm').onsubmit = async function(event) {
+            event.preventDefault();
+            const query = document.getElementById('query').value;
+            const doc_id = localStorage.getItem('doc_id');
+
+            const response = await fetch(`/interact/${doc_id}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query })
+            });
+
+            const result = await response.json();
+            document.getElementById('response').textContent = result.response;
+        };
+    </script>
+</body>
+</html>
