@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# any Vector DB 
+chromadb/
+
+# any Folder 
+uploads/

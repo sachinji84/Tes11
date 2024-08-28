@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
+# from langchain.runnables import RunnableSequence
 from langchain.chains import LLMChain
 # from langchain.prompts import ChatPromptTemplate
 # from langchain.chains.sequential import SimpleSequentialChain
@@ -107,7 +108,13 @@ def interact_with_document(doc_id):
     # chain = SimpleSequentialChain(llm=llm_model,prompt_template=prompt_template)
 
     # Create an LLMChain to use the prompt template and LLM
-    chain = LLMChain(llm=llm_model, prompt=prompt_template)
+    chain = LLMChain(
+        llm=llm_model,
+        prompt=prompt_template
+    )
+
+    # Create a RunnableSequence with the prompt template and LLM
+    # sequence = RunnableSequence(prompt_template | llm_model)
 
     # # Define messages for the prompt
     # messages = [
@@ -133,7 +140,7 @@ def interact_with_document(doc_id):
             {"document_content": document_content,
              "user_query": user_query
              })
-        
+
         return jsonify({"response": response})
 
     except Exception as e:
