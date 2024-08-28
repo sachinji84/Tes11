@@ -1,21 +1,20 @@
 import os
+import csv
+import numpy as np
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_from_directory,render_template
+from flask import Flask, request, jsonify, render_template
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
-from langchain.schema import Document
 
 app = Flask(__name__)
 
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY_COR")
-CHROMA_DB_PATH = "chromadb"  # Define the path where your ChromaDB will be stored
 
 # Initialize the OpenAI client with LangChain
 llm_model = ChatOpenAI(api_key=OPENAI_API_KEY, model_name="gpt-4o")
@@ -31,40 +30,20 @@ UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-# Initialize the vector database globally at the start
-vectordb = None
-
-
-def initialize_vector_db():
-    global vectordb
-    if vectordb is None:
-        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-        vectordb = Chroma(
-            embedding_function=embeddings,
-            persist_directory=CHROMA_DB_PATH
-        )
-    return vectordb
-
-
-# Initialize the vector store when the application starts
-initialize_vector_db()
-
 
 @app.route('/')
 def index():
     """Serve the HTML page"""
-    # return send_from_directory('templates', 'upload.html')
     return render_template('upload.html')
 
 # Handle PDF Upload and Process the Document
+
+
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     """
     Handles the upload of a PDF document. 
-    Extracts text from the document, splits it into chunks, embeds the chunks, and stores them in a vector database.
-
-    Parameters:
-    - request: The incoming Flask request object containing the uploaded file.
+    Extracts text from the document, splits it into chunks, embeds the chunks, and stores them in a CSV file.
 
     Returns:
     - A JSON response indicating success or failure. If successful, it includes the document ID.
@@ -99,19 +78,19 @@ def handle_upload():
         chunks = text_splitter.split_text(content)
 
         # Embed the chunks
-        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-        vectordb = Chroma(
-            embedding_function=embeddings,
-            persist_directory=CHROMA_DB_PATH
-        )
+        embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 
-        # Use the global vector database
-        vectordb.add_texts(
-            texts=chunks,
-            ids=[f"{file.filename}-{i}" for i in range(len(chunks))]
-        )
+        # CSV file to store chunk ID, chunk text, and embeddings
+        csv_file_path = os.path.join(
+            UPLOAD_FOLDER, f"{file.filename}_embeddings.csv")
 
-        vectordb.persist()
+        with open(csv_file_path, mode='w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(["ChunkID", "ChunkText", "Embeddings"])
+
+            for i, chunk in enumerate(chunks):
+                embedding = embeddings_model.embed_query(chunk)
+                writer.writerow([f"{file.filename}-{i}", chunk, embedding])
 
         doc_id = len(documents) + 1
         documents[doc_id] = file.filename
@@ -120,16 +99,16 @@ def handle_upload():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 # Interact with the Document and Retrieve Relevant Chunks
-# Update the /interact/<int:doc_id> route to retrieve the most relevant chunks and generate a response:
 
 
 @app.route('/interact/<int:doc_id>', methods=['POST'])
 def interact_with_document(doc_id: int):
     """
     This function interacts with a document based on a user's query.
-    It retrieves the relevant chunks of text from the document using a vector database,
-    generates a response using a language model, and updates the conversation history.
+    It retrieves the relevant chunks of text from the CSV file using a similarity search
+    and generates a response using a language model.
 
     Parameters:
     - doc_id (int): The unique identifier of the document.
@@ -144,32 +123,52 @@ def interact_with_document(doc_id: int):
     if not user_query:
         return jsonify({"error": "No query provided"}), 400
 
-    # Perform similarity search
-    search_results = vectordb.similarity_search_with_score(user_query, k=5)
-    relevant_content = "\n".join([result[0].page_content for result in search_results])
-
-    # Retrieve conversation history or initialize it
-    history = conversation_history.get(doc_id, "")
-
-    # Define a prompt template
-    template = (
-        "You are a helpful assistant.\n"
-        "Conversation history:\n{history}\n"
-        "Always Answer from given context. if you do not find the information say information is not available "
-        "Relevant document content:\n{relevant_content}\n"
-        "User query: {user_query}"
-    )
-
-    # Create the prompt using LangChain's PromptTemplate
-    prompt_template = PromptTemplate(
-        template=template,
-        input_variables=["history", "relevant_content", "user_query"]
-    )
-
-    # Create an LLMChain to use the prompt template and LLM
-    chain = prompt_template | llm_model
+    # Load the CSV file containing embeddings
+    csv_file_path = os.path.join(
+        UPLOAD_FOLDER, f"{documents[doc_id]}_embeddings.csv")
+    embeddings_model = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
 
     try:
+        # Embed the user's query
+        query_embedding = embeddings_model.embed_query(user_query)
+
+        # Read the CSV file and calculate similarities
+        results = []
+        with open(csv_file_path, mode='r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                chunk_embedding = np.fromstring(row["Embeddings"][1:-1], sep=' ')
+                similarity_score = np.dot(query_embedding, chunk_embedding) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding))
+                results.append((row["ChunkText"], similarity_score))
+
+        # Sort results by similarity score in descending order
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        # Take the top 5 most relevant chunks
+        relevant_content = "\n".join([result[0] for result in results[:5]])
+
+        # Retrieve conversation history or initialize it
+        history = conversation_history.get(doc_id, "")
+
+        # Define a prompt template
+        template = (
+            "You are a helpful assistant.\n"
+            "Conversation history:\n{history}\n"
+            "Always Answer from given context. If you do not find the information, say the information is not available.\n"
+            "Relevant document content:\n{relevant_content}\n"
+            "User query: {user_query}"
+        )
+
+        # Create the prompt using LangChain's PromptTemplate
+        prompt_template = PromptTemplate(
+            template=template,
+            input_variables=["history", "relevant_content", "user_query"]
+        )
+
+        # Create an LLMChain to use the prompt template and LLM
+        chain = prompt_template | llm_model
+
         response = chain.invoke({
             "history": history,
             "relevant_content": relevant_content,
