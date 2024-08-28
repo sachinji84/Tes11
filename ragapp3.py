@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_from_directory,render_template
+from flask import Flask, request, jsonify, send_from_directory
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
@@ -9,6 +9,8 @@ from langchain.prompts import PromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
 from langchain.schema import Document
+from langchain.chains.combine_documents import create_stuff_documents_chain
+
 
 app = Flask(__name__)
 
@@ -53,8 +55,7 @@ initialize_vector_db()
 @app.route('/')
 def index():
     """Serve the HTML page"""
-    # return send_from_directory('templates', 'upload.html')
-    return render_template('upload.html')
+    return send_from_directory('templates', 'upload.html')
 
 # Handle PDF Upload and Process the Document
 
@@ -152,39 +153,54 @@ def interact_with_document(doc_id: int):
 
     # Retrieve conversation history or initialize it
     history = conversation_history.get(doc_id, "")
+    
+    # Convert the relevant content into a list of Document objects
+    # context = [Document(page_content=relevant_content)]    
 
     # Define a prompt template
+            # "Relevant document content:\n{relevant_content}\n"
     template = (
         "You are a helpful assistant.\n"
         "Conversation history:\n{history}\n"
         "Always Answer from given context. if you do not find the information say information is not available "
-        "Relevant document content:\n{relevant_content}\n"
+        "Context:\n{context}\n"
         "User query: {user_query}"
     )
 
     # Create the prompt using LangChain's PromptTemplate
     prompt_template = PromptTemplate(
         template=template,
-        input_variables=["history", "relevant_content", "user_query"]
+        input_variables=["history", "context", "user_query"]
     )
 
-    # Create an LLMChain to use the prompt template and LLM
-    chain = prompt_template | llm_model
+    # # Create an LLMChain to use the prompt template and LLM
+    # chain = prompt_template | llm_model
+    
+    # Create the document chain
+    
+    
+    document_chain = create_stuff_documents_chain(llm_model, prompt_template)    
+    
 
     try:
-        response = chain.invoke({
+        # Convert context to a string that can be passed into the template
+        # context_str = "\n".join([doc.page_content for doc in context])
+                
+        response = document_chain.invoke({
             "history": history,
-            "relevant_content": relevant_content,
-            "user_query": user_query
+            "user_query": user_query,
+            # "relevant_content": relevant_content,
+            "context": [Document(page_content=relevant_content)]    
+
         })
 
         # Append the new query and response to the history
-        conversation_history[doc_id] = history + \
-            f"User: {user_query}\nAssistant: {response.content}\n"
+        conversation_history[doc_id] = history + f"User: {user_query}\nAssistant: {response.content}\n"
 
         return jsonify({"response": response.content})
 
     except Exception as e:
+        print(e)
         return jsonify({"error": str(e)}), 500
 
 
