@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_from_directory,render_template
+from flask import Flask, request, jsonify, send_from_directory, render_template
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
@@ -38,7 +38,11 @@ vectordb = None
 def initialize_vector_db():
     global vectordb
     if vectordb is None:
-        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+        embeddings = OpenAIEmbeddings(
+            openai_api_key=OPENAI_API_KEY,
+            model="text-embedding-ada-002"
+        )
+
         vectordb = Chroma(
             embedding_function=embeddings,
             persist_directory=CHROMA_DB_PATH
@@ -57,6 +61,8 @@ def index():
     return render_template('upload.html')
 
 # Handle PDF Upload and Process the Document
+
+
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     """
@@ -177,8 +183,7 @@ def interact_with_document(doc_id: int):
         })
 
         # Append the new query and response to the history
-        conversation_history[doc_id] = history + \
-            f"User: {user_query}\nAssistant: {response.content}\n"
+        conversation_history[doc_id] = history + f"User: {user_query}\nAssistant: {response.content}\n"
 
         return jsonify({"response": response.content})
 
