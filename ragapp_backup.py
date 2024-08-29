@@ -1,25 +1,26 @@
 import os
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, render_template
-from langchain_openai import ChatOpenAI
+from flask import Flask, request, jsonify, send_from_directory, render_template
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
+from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import ChatOpenAI
+from langchain.schema import Document
 
-# Initialize Flask app
 app = Flask(__name__)
 
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY_COR")
-CHROMA_DB_PATH = "chromadb"  # This is path where your ChromaDB will be stored
+CHROMA_DB_PATH = "chromadb"  # Define the path where your ChromaDB will be stored
 
 # Initialize the OpenAI client with LangChain
 llm_model = ChatOpenAI(api_key=OPENAI_API_KEY, model_name="gpt-4o")
 
-# In-memory storage for simplicity (consider using a database in production)
+# In-memory storage for simplicity (in production, use a database)
 documents = {}
 
 # In-memory storage for conversation history
@@ -27,10 +28,12 @@ conversation_history = {}
 
 # Ensure the uploads directory exists
 UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
 # Initialize the vector database globally at the start
 vectordb = None
+
 
 def initialize_vector_db():
     global vectordb
@@ -50,19 +53,30 @@ def initialize_vector_db():
 # Initialize the vector store when the application starts
 initialize_vector_db()
 
-# Serves the HTML page for the document upload and interaction interface.
+
 @app.route('/')
 def index():
+    """Serve the HTML page"""
+    # return send_from_directory('templates', 'upload.html')
     return render_template('upload.html')
 
 # Handle PDF Upload and Process the Document
+
+
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     """
-    Handles the upload of a PDF document. Extracts text from the document, splits it into chunks, embeds the chunks, and 
-    stores them in a vector database.
+    Handles the upload of a PDF document. 
+    Extracts text from the document, splits it into chunks, embeds the chunks, and stores them in a vector database.
+
+    Parameters:
+    - request: The incoming Flask request object containing the uploaded file.
+
+    Returns:
+    - A JSON response indicating success or failure. If successful, it includes the document ID.
+      If unsuccessful, it includes an error message.
     """
-    file = request.files.get('document')
+    file = request.files.get('document')  # Use .get() to avoid KeyError
 
     if file is None:
         return jsonify({"error": "No file part in the request"}), 400
@@ -82,10 +96,20 @@ def handle_upload():
         content = "\n".join([doc.page_content for doc in docs])
 
         # Initialize RecursiveCharacterTextSplitter
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
 
         # Split the document into chunks
         chunks = text_splitter.split_text(content)
+
+        # Embed the chunks
+        embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+        vectordb = Chroma(
+            embedding_function=embeddings,
+            persist_directory=CHROMA_DB_PATH
+        )
 
         # Use the global vector database
         vectordb.add_texts(
@@ -102,13 +126,22 @@ def handle_upload():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 # Interact with the Document and Retrieve Relevant Chunks
+# Update the /interact/<int:doc_id> route to retrieve the most relevant chunks and generate a response:
+
+
 @app.route('/interact/<int:doc_id>', methods=['POST'])
 def interact_with_document(doc_id: int):
     """
-    Interacts with a document based on a user's query, retrieves the relevant chunks of text from the 
-    document using a vector database,generate a response using a language model, and updates the conversation history.
+    This function interacts with a document based on a user's query.
+    It retrieves the relevant chunks of text from the document using a vector database,
+    generates a response using a language model, and updates the conversation history.
+
+    Parameters:
+    - doc_id (int): The unique identifier of the document.
+
+    Returns:
+    - dict: A JSON response containing either the generated response or an error message.
     """
     if doc_id not in documents:
         return jsonify({"error": "Document not found"}), 404
@@ -139,7 +172,7 @@ def interact_with_document(doc_id: int):
         input_variables=["history", "relevant_content", "user_query"]
     )
 
-    # Create an Chain to use the prompt template and LLM model
+    # Create an LLMChain to use the prompt template and LLM
     chain = prompt_template | llm_model
 
     try:
@@ -149,10 +182,9 @@ def interact_with_document(doc_id: int):
             "user_query": user_query
         })
 
-        # Append the new query and its response to the history
+        # Append the new query and response to the history
         conversation_history[doc_id] = history + f"User: {user_query}\nAssistant: {response.content}\n"
 
-        # Send final response
         return jsonify({"response": response.content})
 
     except Exception as e:
